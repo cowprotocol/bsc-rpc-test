@@ -1,4 +1,4 @@
-import { formatEther, formatUnits, maxUint256, type Hex } from 'viem';
+import { formatEther, formatUnits, maxUint256, type Address, type Hex } from 'viem';
 import { CONFIG } from './config.js';
 import { publicClient, walletFor } from './clients.js';
 import { ERC20_ABI } from './abi.js';
@@ -6,35 +6,42 @@ import { allowance, balanceOf, tokenDecimals, tokenSymbol } from './tokens.js';
 
 const APPROVE = (process.env.APPROVE ?? '').toLowerCase() === 'true';
 
-async function inspect(label: string, pk: Hex, decIn: number, symIn: string) {
-  if (!pk) { console.log(`${label}: no key set`); return; }
+async function ensureApproval(pk: Hex, token: Address, spender: Address, label: string) {
   const wallet = walletFor(pk);
-  const addr = wallet.account.address;
-  const [bnb, tin, allow] = await Promise.all([
+  const allow = await allowance(token, wallet.account.address, spender);
+  if (allow >= maxUint256 / 2n) { console.log(`   ${label}: approved`); return; }
+  if (!APPROVE) { console.log(`   ${label}: NOT approved — re-run with APPROVE=true`); return; }
+  console.log(`   ${label}: approving ${spender}…`);
+  const hash = await wallet.writeContract({ address: token, abi: ERC20_ABI, functionName: 'approve', args: [spender, maxUint256] });
+  await publicClient.waitForTransactionReceipt({ hash });
+  console.log(`   ${label}: approved (${hash})`);
+}
+
+async function inspect(label: string, pk: Hex) {
+  if (!pk) { console.log(`${label}: no key set`); return; }
+  const addr = walletFor(pk).account.address;
+  const [decIn, decOut, symIn, symOut] = await Promise.all([
+    tokenDecimals(CONFIG.tokenIn), tokenDecimals(CONFIG.tokenOut),
+    tokenSymbol(CONFIG.tokenIn), tokenSymbol(CONFIG.tokenOut),
+  ]);
+  const [bnb, tin, tout] = await Promise.all([
     publicClient.getBalance({ address: addr }),
     balanceOf(CONFIG.tokenIn, addr),
-    allowance(CONFIG.tokenIn, addr, CONFIG.router),
+    balanceOf(CONFIG.tokenOut, addr),
   ]);
-  const need = tin >= 0n;
   console.log(`${label} ${addr}`);
-  console.log(`   BNB: ${formatEther(bnb)}   ${symIn}: ${formatUnits(tin, decIn)}   allowance: ${allow >= maxUint256 / 2n ? 'MAX' : formatUnits(allow, decIn)}`);
-  if (APPROVE && allow < maxUint256 / 2n) {
-    console.log(`   approving router ${CONFIG.router} ...`);
-    const hash = await wallet.writeContract({ address: CONFIG.tokenIn, abi: ERC20_ABI, functionName: 'approve', args: [CONFIG.router, maxUint256] });
-    await publicClient.waitForTransactionReceipt({ hash });
-    console.log(`   approved (${hash})`);
-  } else if (!APPROVE && allow < maxUint256 / 2n) {
-    console.log('   ⚠ not approved — re-run with APPROVE=true to approve the router');
-  }
-  void need;
+  console.log(`   BNB ${formatEther(bnb)} | ${symIn} ${formatUnits(tin, decIn)} | ${symOut} ${formatUnits(tout, decOut)}`);
+  // Forward leg sells TOKEN_IN on the V2 router; the unwind sells TOKEN_OUT on
+  // whichever venue is configured (V2 router or the V3 SwapRouter).
+  const unwindSpender = CONFIG.unwindVenue === 'v3' ? CONFIG.v3SwapRouter : CONFIG.router;
+  await ensureApproval(pk, CONFIG.tokenIn, CONFIG.router, `${symIn}→V2router`);
+  await ensureApproval(pk, CONFIG.tokenOut, unwindSpender, `${symOut}→${CONFIG.unwindVenue === 'v3' ? 'V3router' : 'V2router'}`);
 }
 
 async function main() {
-  const [decIn, symIn] = await Promise.all([tokenDecimals(CONFIG.tokenIn), tokenSymbol(CONFIG.tokenIn)]);
-  console.log(`Wallet prep — selling ${symIn} via router ${CONFIG.router}\n`);
-  await inspect('Wallet A', CONFIG.walletAPk, decIn, symIn);
-  await inspect('Wallet B', CONFIG.walletBPk, decIn, symIn);
-  console.log('\nEach wallet needs: enough', symIn, 'for the swap amount + BNB for gas + router approval.');
+  console.log('Wallet prep — each wallet needs TOKEN_IN inventory + BNB gas + router approval on both tokens\n');
+  await inspect('Wallet A', CONFIG.walletAPk);
+  await inspect('Wallet B', CONFIG.walletBPk);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

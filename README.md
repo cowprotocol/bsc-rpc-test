@@ -27,6 +27,11 @@ same amount, same path, **identical gas price**, fired simultaneously.
    (opposite-direction after ours), and sandwich (same address on both sides); reconstruct
    reserves to size the dislocation our swap created; and check whether the blink tx ever
    appeared in the public mempool.
+6. **Wait for the arb-back** (`WAIT_FOR_REVERT`): poll the V2 price against the live V3
+   reference until the gap our swap opened closes (or a timeout). The elapsed time is
+   effectively the backrun latency, recorded per run, and keeps iterations independent.
+7. **Unwind** (`UNWIND`): sell the received TOKEN_OUT back to TOKEN_IN so capital recycles
+   (you only need ~one trade of inventory per wallet, not N), then wait for that to settle.
 
 Over many iterations it **alternates which wallet uses which path** (`ALTERNATE_PATHS`)
 so per-wallet and in-block ordering effects cancel out.
@@ -79,8 +84,13 @@ Results print a per-iteration comparison and an aggregate table, and are written
   and gas, so treat it as an **upper bound** on extractable value, separate from the
   **realized** backrun we detect on-chain.
 - **Same-block interaction:** if both wallets land in the same block they affect each
-  other's price; `ALTERNATE_PATHS` cancels the bias only in aggregate. For clean
-  per-trade numbers, consider spacing the two sends or running many iterations.
+  other's price; `ALTERNATE_PATHS` cancels the bias only in aggregate. `WAIT_FOR_REVERT`
+  + `UNWIND` reset the pool to ~the reference price before each new iteration, so
+  cumulative drift is eliminated. `UNWIND_VENUE=v3` (recommended) unwinds on the deep
+  V3 pool — near-zero impact, leaves the measured V2 pool untouched, no second
+  revert-wait; `v2` round-trips the same thin pool (and re-dislocates it).
+- **If the arb never comes:** when the opportunity is too small for bots, `WAIT_FOR_REVERT`
+  times out and records `reverted: false` (itself a finding); the unwind then helps reset.
 - **Reserve reads** at `block-1` need a node that serves recent historical state
   (any full node does for recent blocks; a public dataseed may prune older ones).
 - **Mempool/leak detection** depends on the WS node supporting `newPendingTransactions`;
@@ -100,6 +110,10 @@ Results print a per-iteration comparison and an aggregate table, and are written
 | `src/swap.ts` | quote, gas, build + sign the swap |
 | `src/senders.ts` | pluggable public / blink `eth_sendRawTransaction` senders |
 | `src/monitor.ts` | public mempool watch + inclusion wait |
-| `src/analyze.ts` | front/back-run detection, price impact, backrun sizing |
+| `src/analyze.ts` | front/back-run detection, price impact, backrun sizing, V2 price |
+| `src/refprice.ts` | deepest-V3-pool reference price auto-fetch |
+| `src/reversion.ts` | wait for the pool to be arbed back (backrun latency) |
+| `src/unwind.ts` | sell TOKEN_OUT back to TOKEN_IN (recycle capital) |
 | `src/experiment.ts` | orchestrator + reporting (entry point) |
-| `src/prepare.ts` | balances + router approvals |
+| `src/prepare.ts` | balances + router approvals (both tokens) |
+| `src/refcheck.ts` | `npm run ref:check` — print V3 ref, V2 mid, and the gap |

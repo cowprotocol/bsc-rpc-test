@@ -3,6 +3,7 @@ import { FACTORY_ABI, PAIR_ABI } from './abi.js';
 import { CONFIG } from './config.js';
 import { publicClient } from './clients.js';
 import { tokenDecimals } from './tokens.js';
+import { fetchV3RefPriceHuman } from './refprice.js';
 import type { PoolSwap, RunFindings } from './types.js';
 
 const SWAP_EVENT = getAbiItem({ abi: PAIR_ABI, name: 'Swap' });
@@ -34,6 +35,13 @@ async function reservesAt(blockNumber: bigint): Promise<{ base: bigint; quote: b
     address: pair, abi: PAIR_ABI, functionName: 'getReserves', blockNumber,
   })) as readonly [bigint, bigint, number];
   return baseIsToken0 ? { base: r0, quote: r1 } : { base: r1, quote: r0 };
+}
+
+/** Current V2 mid price as TOKEN_OUT per 1 TOKEN_IN (human units). */
+export async function currentV2PriceHuman(): Promise<number> {
+  const { decIn, decOut } = await getPairInfo();
+  const r = await reservesAt(await publicClient.getBlockNumber());
+  return (Number(r.quote) / Number(r.base)) * 10 ** (decIn - decOut);
 }
 
 /** Decoded pool swaps in a block, ordered by logIndex. */
@@ -86,8 +94,12 @@ export async function analyzeRun(opts: { ourTxHash: Hex; blockNumber: bigint }):
   }
 
   const priceRaw = (b: bigint, q: bigint) => Number(q) / Number(b); // quote per base (raw)
-  const pRef = CONFIG.refPrice
-    ? Number(CONFIG.refPrice) * 10 ** (decOut - decIn) // human quote/base -> raw ratio
+  // Reference price (TOKEN_OUT per TOKEN_IN): explicit REF_PRICE > V3 auto-fetch > V2 mid.
+  let refHuman: number | undefined;
+  if (CONFIG.refPrice) refHuman = Number(CONFIG.refPrice);
+  else if (CONFIG.autoRefV3) refHuman = (await fetchV3RefPriceHuman()) ?? undefined;
+  const pRef = refHuman !== undefined
+    ? refHuman * 10 ** (decOut - decIn) // human quote/base -> raw ratio
     : priceRaw(pre.base, pre.quote);
   const pAfter = priceRaw(base, quote);
   const priceImpactBps = pRef > 0 ? Math.abs((pRef - pAfter) / pRef) * 10_000 : 0;
@@ -99,6 +111,7 @@ export async function analyzeRun(opts: { ourTxHash: Hex; blockNumber: bigint }):
       sandwich: { detected: !!sandwichAddr, byAddress: sandwichAddr },
       backrunOpportunityOut: optimalBackrunProfitOut(base, quote, pRef),
       priceImpactBps,
+      refPrice: refHuman,
     },
     realizedOut: ours?.amountOutRaw,
   };

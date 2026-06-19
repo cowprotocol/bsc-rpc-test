@@ -6,8 +6,10 @@ import { quote, resolveGasPrice, buildSignedSwap } from './swap.js';
 import { publicSender, blinkSender } from './senders.js';
 import { startMempoolWatch, waitForInclusion } from './monitor.js';
 import { analyzeRun, getPairInfo } from './analyze.js';
+import { waitForReversion } from './reversion.js';
+import { unwindToUsdt } from './unwind.js';
 import { tokenSymbol } from './tokens.js';
-import type { PairedRun, Route, RouteResult, SignedSwap } from './types.js';
+import type { PairedRun, Reversion, Route, RouteResult, SignedSwap } from './types.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const jsonReplacer = (_k: string, v: unknown) => (typeof v === 'bigint' ? v.toString() : v);
@@ -87,7 +89,7 @@ async function runOne(iteration: number, decIn: number, decOut: number, symOut: 
         blockTimestamp: inc.blockTimestamp,
         txIndex: inc.txIndex,
         blocksWaited: Number(inc.blockNumber - submitBlock),
-        inclusionLatencyMs: inc.blockTimestamp * 1000 - submittedAtMs,
+        inclusionLatencyMs: inc.observedAtMs - submittedAtMs, // wall-clock: receipt observed − submit
         realizedOut,
         slippageVsQuoteBps: slippageBps,
       };
@@ -96,11 +98,32 @@ async function runOne(iteration: number, decIn: number, decOut: number, symOut: 
     return result;
   };
 
-  return {
-    iteration, startedAt,
-    public: await assemble('public', pubSend, pubInc),
-    blink: await assemble('blink', blkSend, blkInc),
-  };
+  const publicResult = await assemble('public', pubSend, pubInc);
+  const blinkResult = await assemble('blink', blkSend, blkInc);
+
+  // Wait for the arb-back so this iteration's dislocation is independent of the next.
+  let reversion: Reversion | undefined;
+  if (CONFIG.waitForRevert) {
+    reversion = await waitForReversion();
+    console.log(`   forward arbed back: ${reversion.reverted} in ${(reversion.elapsedMs / 1000).toFixed(1)}s (gap ${reversion.startGapBps.toFixed(0)}→${reversion.endGapBps.toFixed(0)} bps)`);
+  }
+
+  // Recycle capital: sell the ADA back to USDT, then let that dislocation settle too.
+  if (CONFIG.unwind) {
+    for (const [tag, pk] of [['public', pkForPublic], ['blink', pkForBlink]] as const) {
+      try {
+        const u = await unwindToUsdt(pk);
+        if (u) console.log(`   unwound (${tag}) ${formatUnits(u.soldOut, decOut)} ${symOut} → ${formatUnits(u.gotIn, decIn)} USDT`);
+      } catch (e) {
+        console.warn(`   unwind ${tag} failed: ${(e as Error).message}`);
+      }
+    }
+    // A V2 unwind re-dislocates the measured pool, so wait for that to settle too;
+    // a V3 unwind doesn't touch it, so no second wait is needed.
+    if (CONFIG.waitForRevert && CONFIG.unwindVenue === 'v2') await waitForReversion();
+  }
+
+  return { iteration, startedAt, public: publicResult, blink: blinkResult, reversion };
 }
 
 function printRun(run: PairedRun, decOut: number, symOut: string) {
@@ -108,11 +131,15 @@ function printRun(run: PairedRun, decOut: number, symOut: string) {
     const i = r.inclusion;
     const f = r.findings;
     const inc = i.included ? `blk +${i.blocksWaited} idx#${i.txIndex} ${i.inclusionLatencyMs}ms` : 'NOT INCLUDED';
-    const fr = f.frontrun.detected ? `YES(${f.frontrun.byAddress?.slice(0, 10)})` : 'no';
-    const br = f.backrun.detected ? `YES(${f.backrun.byAddress?.slice(0, 10)})` : 'no';
+    const fr = f.frontrun.detected ? 'YES' : 'no';
+    const br = f.backrun.detected ? 'YES' : 'no';
     const opp = `${formatUnits(f.backrunOpportunityOut, decOut)} ${symOut} / ${f.priceImpactBps.toFixed(1)}bps`;
     const leak = r.route === 'blink' ? `  leaked=${f.leakedToPublicMempool ? 'YES' : 'no'}` : '';
-    return `   ${r.route.padEnd(6)} | ${inc} | frontrun ${fr} | backrun ${br} | opp ${opp}${leak}`;
+    const lines = [`   ${r.route.padEnd(6)} | ${inc} | frontrun ${fr} | backrun ${br} | opp ${opp}${leak}`];
+    if (f.frontrun.detected) lines.push(`            frontrun tx: ${f.frontrun.byTx}  by ${f.frontrun.byAddress}`);
+    if (f.backrun.detected) lines.push(`            backrun  tx: ${f.backrun.byTx}  by ${f.backrun.byAddress}`);
+    if (f.sandwich.detected) lines.push(`            sandwich by ${f.sandwich.byAddress} (front+back same address)`);
+    return lines.join('\n');
   };
   console.log(row(run.public));
   console.log(row(run.blink));

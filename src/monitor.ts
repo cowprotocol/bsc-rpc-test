@@ -43,6 +43,7 @@ export function startMempoolWatch(hashes: Hex[]): MempoolWatch {
 export interface InclusionReceipt {
   blockNumber: bigint;
   blockTimestamp: number;
+  observedAtMs: number; // local wall-clock when the receipt was first observed
   txIndex: number;
   status: 'success' | 'reverted';
 }
@@ -50,11 +51,14 @@ export interface InclusionReceipt {
 /** Wait for a tx to be mined, returning inclusion details or null on timeout. */
 export async function waitForInclusion(hash: Hex, timeoutMs: number): Promise<InclusionReceipt | null> {
   try {
-    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: timeoutMs });
+    // Tight polling so the observed time approximates true inclusion latency.
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: timeoutMs, pollingInterval: 250 });
+    const observedAtMs = Date.now(); // capture before the extra getBlock round-trip
     const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
     return {
       blockNumber: receipt.blockNumber,
       blockTimestamp: Number(block.timestamp),
+      observedAtMs,
       txIndex: receipt.transactionIndex,
       status: receipt.status,
     };

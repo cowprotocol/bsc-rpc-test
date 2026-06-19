@@ -50,3 +50,76 @@ export const PAIR_ABI = [
     ],
   },
 ] as const;
+
+export const V3_FACTORY_ABI = [
+  {
+    type: 'function', name: 'getPool', stateMutability: 'view',
+    inputs: [{ name: 'a', type: 'address' }, { name: 'b', type: 'address' }, { name: 'fee', type: 'uint24' }],
+    outputs: [{ type: 'address' }],
+  },
+] as const;
+
+export const V3_POOL_ABI = [
+  { type: 'function', name: 'token0', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+  { type: 'function', name: 'token1', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
+  { type: 'function', name: 'liquidity', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint128' }] },
+  {
+    type: 'function', name: 'slot0', stateMutability: 'view', inputs: [],
+    outputs: [
+      { name: 'sqrtPriceX96', type: 'uint160' },
+      { name: 'tick', type: 'int24' },
+      { name: 'observationIndex', type: 'uint16' },
+      { name: 'observationCardinality', type: 'uint16' },
+      { name: 'observationCardinalityNext', type: 'uint16' },
+      { name: 'feeProtocol', type: 'uint32' },
+      { name: 'unlocked', type: 'bool' },
+    ],
+  },
+] as const;
+
+// PancakeSwap V3 SwapRouter. exactInputSingle is the with-`deadline` variant
+// (selector 0x414bf389), verified against the deployed bytecode on BSC.
+export const V3_SWAP_ROUTER_ABI = [
+  {
+    type: 'function', name: 'exactInputSingle', stateMutability: 'payable',
+    inputs: [{
+      name: 'params', type: 'tuple',
+      components: [
+        { name: 'tokenIn', type: 'address' },
+        { name: 'tokenOut', type: 'address' },
+        { name: 'fee', type: 'uint24' },
+        { name: 'recipient', type: 'address' },
+        { name: 'deadline', type: 'uint256' },
+        { name: 'amountIn', type: 'uint256' },
+        { name: 'amountOutMinimum', type: 'uint256' },
+        { name: 'sqrtPriceLimitX96', type: 'uint160' },
+      ],
+    }],
+    outputs: [{ name: 'amountOut', type: 'uint256' }],
+  },
+] as const;
+
+// PancakeSwap V3 QuoterV2. quoteExactInputSingle (selector 0xc6a5026a) returns
+// normally (not revert-based), so it's callable via eth_call — declared `view`
+// here so viem's readContract can call it for off-chain quoting.
+export const QUOTER_V2_ABI = [
+  {
+    type: 'function', name: 'quoteExactInputSingle', stateMutability: 'view',
+    inputs: [{
+      name: 'params', type: 'tuple',
+      components: [
+        { name: 'tokenIn', type: 'address' },
+        { name: 'tokenOut', type: 'address' },
+        { name: 'amountIn', type: 'uint256' },
+        { name: 'fee', type: 'uint24' },
+        { name: 'sqrtPriceLimitX96', type: 'uint160' },
+      ],
+    }],
+    outputs: [
+      { name: 'amountOut', type: 'uint256' },
+      { name: 'sqrtPriceX96After', type: 'uint160' },
+      { name: 'initializedTicksCrossed', type: 'uint32' },
+      { name: 'gasEstimate', type: 'uint256' },
+    ],
+  },
+] as const;

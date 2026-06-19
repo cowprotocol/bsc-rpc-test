@@ -42,7 +42,7 @@ export interface InclusionMetrics {
   blockTimestamp?: number;
   txIndex?: number;            // position within the block
   blocksWaited?: number;       // inclusionBlock - submitBlock
-  inclusionLatencyMs?: number; // blockTimestamp*1000 - submittedAtMs
+  inclusionLatencyMs?: number; // wall-clock ms: receipt-observed time − submittedAtMs (blocksWaited is the primary metric)
   realizedOut?: bigint;        // actual TOKEN_OUT received
   slippageVsQuoteBps?: number; // (quotedOut - realizedOut) / quotedOut
 }
@@ -54,6 +54,8 @@ export interface RunFindings {
   // Theoretical backrun opportunity our swap created, in TOKEN_OUT units.
   backrunOpportunityOut: bigint;
   priceImpactBps: number;
+  // Reference price used (TOKEN_OUT per 1 TOKEN_IN): from V3 auto-fetch or REF_PRICE; undefined = V2 pre-trade mid.
+  refPrice?: number;
   // Whether the tx leaked into the public mempool before inclusion.
   leakedToPublicMempool?: boolean;
 }
@@ -65,9 +67,17 @@ export interface RouteResult {
   findings: RunFindings;
 }
 
+export interface Reversion {
+  reverted: boolean;       // did the V2 pool return to within threshold of the V3 ref?
+  elapsedMs: number;       // time until reversion (≈ backrun latency), or timeout
+  startGapBps: number;     // |V2 - V3| right after our swap
+  endGapBps: number;       // |V2 - V3| when we stopped waiting
+}
+
 export interface PairedRun {
   iteration: number;
   startedAt: string;
   public: RouteResult;
   blink: RouteResult;
+  reversion?: Reversion;   // arb-back observed after the forward legs
 }
