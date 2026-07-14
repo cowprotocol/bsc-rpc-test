@@ -32,7 +32,7 @@ jobs:
           # Full history lets the action compute an accurate diff vs. the base branch.
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@2fee15510437d71399d9139ed60433470484a8fb # v1.0.153
+      - uses: anthropics/claude-code-action@4633baf5267540f3f8cb58b684f79901d564c280 # v1.0.160
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           trigger_phrase: "@claude"
